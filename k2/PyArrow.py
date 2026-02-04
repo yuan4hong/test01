@@ -11,35 +11,40 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 # Configuration
-##TABLES = ["snst_insight"]  # Add more tables here: ["snst_insight", "other_table"]
-PROVIDER = "OCI_HSG"
+CLUSTERS = {
+    "OCI_HSG": "oci-hsg-dca-wl-prd-001",
+    "GCP_EAST4": "gcp-us-east4-dca-wl-prd-001",
+}
+
 TABLES = ["slurm_nodes"]
-LIMIT = 10
-BATCH_SIZE = 5  # Larger batches work better with JSON approach
+LIMIT = 10000
+BATCH_SIZE = 5000  # Larger batches work better with JSON approach
 TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 S3_BUCKET = "s3://dcartm-team/hongy/maestro_restore"
 OUTPUT_DIR = "/home/jovyan"
-
+NAMESPACE = "maestro"
 
 print("=" * 60)
 print("PyArrow Export: PostgreSQL -> Parquet (JSON method)")
 print("=" * 60)
 print(f"Timestamp: {TIMESTAMP}")
+print(f"Clusters: {list(CLUSTERS.keys())}")
 print(f"Tables: {TABLES}")
 print(f"Limit per table: {LIMIT} rows")
 print()
 
 
-def export_table_to_parquet(table_name: str, limit: int, batch_size: int) -> str:
+def export_table_to_parquet(cluster_name: str, context: str, table_name: str, limit: int, batch_size: int) -> str:
     """Export a single Postgres table to Parquet using JSON serialization.
     
     This handles ALL Postgres data types correctly (JSON, arrays, bytea, etc.)
     """
-    output_file = os.path.join(OUTPUT_DIR, f"{table_name}_{TIMESTAMP}.parquet")
+    output_file = os.path.join(OUTPUT_DIR, f"{cluster_name}_{table_name}_{TIMESTAMP}.parquet")
     all_rows = []
     num_batches = (limit + batch_size - 1) // batch_size
     
-    print(f"Exporting {table_name}...")
+    print(f"Exporting {table_name} from {cluster_name}...")
+    print(f"  Context: {context}")
     print(f"  Limit: {limit} rows, Batch size: {batch_size}")
     
     for batch_num in range(num_batches):
@@ -60,7 +65,8 @@ def export_table_to_parquet(table_name: str, limit: int, batch_size: int) -> str
         """
         
         cmd = [
-            'kubectl', 'exec', 'maestro-cluster-1', '--',
+            'kubectl', '--context', context, '-n', NAMESPACE,
+            'exec', 'maestro-cluster-1', '--',
             'psql', '-U', 'postgres', '-d', 'maestro',
             '-t', '-A',  # Tuples only, unaligned output
             '-c', query
@@ -111,13 +117,6 @@ def export_table_to_parquet(table_name: str, limit: int, batch_size: int) -> str
     
     # Write to parquet
     df.to_parquet(output_file, index=False)
-    print(f"  Writing to Delta: dcartm.default.f_maestro_{table_name}")
-    # df.write \
-    #     .option("clusterByAuto", "true") \
-    #     .format('delta') \
-    #     .option("mergeSchema", "true")\
-    #     .mode("overwrite")\
-    #     .saveAsTable(f"`dcartm`.`default`.`f_maestro_{table_name}`")
     
     file_size_kb = os.path.getsize(output_file) / 1024
     print(f"  ✓ Saved: {output_file} ({file_size_kb:.2f} KB)")
@@ -125,9 +124,9 @@ def export_table_to_parquet(table_name: str, limit: int, batch_size: int) -> str
     return output_file
 
 
-def upload_to_s3(local_file: str, table_name: str) -> str:
+def upload_to_s3(local_file: str, cluster_name: str, table_name: str) -> str:
     """Upload parquet file to S3."""
-    s3_path = f"{S3_BUCKET}/export_{TIMESTAMP}/{table_name}.parquet"
+    s3_path = f"{S3_BUCKET}/export_{cluster_name}_{TIMESTAMP}/{table_name}.parquet"
     
     print(f"  Uploading to S3: {s3_path}")
     
@@ -141,84 +140,94 @@ def upload_to_s3(local_file: str, table_name: str) -> str:
     return s3_path
 
 
-# Main execution
-exported_files = {}
+# Main execution - loop over all clusters
+all_exported = {}
 
-for table in TABLES:
+for cluster_name, context in CLUSTERS.items():
     print()
-    print("-" * 40)
+    print("=" * 60)
+    print(f"Processing Cluster: {cluster_name}")
+    print("=" * 60)
     
-    try:
-        # Step 1: Export to parquet
-        local_file = export_table_to_parquet(table, LIMIT, BATCH_SIZE)
+    exported_files = {}
+    
+    for table in TABLES:
+        print()
+        print("-" * 40)
         
-        # Step 2: Upload to S3
-        s3_path = upload_to_s3(local_file, table)
+        try:
+            # Step 1: Export to parquet
+            local_file = export_table_to_parquet(cluster_name, context, table, LIMIT, BATCH_SIZE)
+            
+            # Step 2: Upload to S3
+            s3_path = upload_to_s3(local_file, cluster_name, table)
+            
+            exported_files[table] = {
+                "local": local_file,
+                "s3": s3_path
+            }
+            
+        except Exception as e:
+            print(f"  ✗ Failed to export {table}: {e}")
+            continue
+    
+    if exported_files:
+        all_exported[cluster_name] = exported_files
         
-        exported_files[table] = {
-            "local": local_file,
-            "s3": s3_path
+        # Generate Jupyter notebook for this cluster
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        notebook_file = os.path.join(script_dir, f"reg_{cluster_name}_{TIMESTAMP}.ipynb")
+        
+        cells = []
+        
+        # Cells for each table
+        for table, paths in exported_files.items():
+            databricks_table = f"{cluster_name}_maestro_{table}"
+            code = [
+                f'spark.sql("DROP TABLE IF EXISTS {databricks_table}")\n',
+                f'spark.sql("""\n',
+                f'    CREATE TABLE {databricks_table}\n',
+                f'    USING parquet\n',
+                f"    LOCATION '{paths['s3']}'\n",
+                f'""")\n',
+                f'spark.sql("DESCRIBE {databricks_table}").show(50, truncate=False)\n',
+                f'spark.sql("SELECT * FROM {databricks_table} LIMIT 10").show(truncate=False)'
+            ]
+            cells.append({
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": code
+            })
+        
+        notebook = {
+            "cells": cells,
+            "metadata": {
+                "kernelspec": {
+                    "display_name": "Python 3",
+                    "language": "python",
+                    "name": "python3"
+                }
+            },
+            "nbformat": 4,
+            "nbformat_minor": 4
         }
         
-    except Exception as e:
-        print(f"  ✗ Failed to export {table}: {e}")
-        continue
+        with open(notebook_file, 'w') as f:
+            json.dump(notebook, f, indent=1)
+        
+        print(f"\n✓ Generated notebook: {notebook_file}")
 
-# Summary
+# Final Summary
 print()
 print("=" * 60)
-print("Summary")
+print("Final Summary")
 print("=" * 60)
 
-if exported_files:
-    print(f"✓ Exported {len(exported_files)}/{len(TABLES)} tables\n")
-    
-    # Generate Jupyter notebook for Databricks registration
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    notebook_file = os.path.join(script_dir, f"reg_{PROVIDER}_{TIMESTAMP}.ipynb")
-    
-    cells = []
-    
-    # Cells for each table
-    for table, paths in exported_files.items():
-        databricks_table = f"{PROVIDER}_maestro_{table}"
-        code = [
-            f'spark.sql("DROP TABLE IF EXISTS {databricks_table}")\n',
-            f'spark.sql("""\n',
-            f'    CREATE TABLE {databricks_table}\n',
-            f'    USING parquet\n',
-            f"    LOCATION '{paths['s3']}'\n",
-            f'""")\n',
-            f'spark.sql("DESCRIBE {databricks_table}").show(50, truncate=False)\n',
-            f'spark.sql("SELECT * FROM {databricks_table} LIMIT 10").show(truncate=False)'
-        ]
-        cells.append({
-            "cell_type": "code",
-            "execution_count": None,
-            "metadata": {},
-            "outputs": [],
-            "source": code
-        })
-    
-    notebook = {
-        "cells": cells,
-        "metadata": {
-            "kernelspec": {
-                "display_name": "Python 3",
-                "language": "python",
-                "name": "python3"
-            }
-        },
-        "nbformat": 4,
-        "nbformat_minor": 4
-    }
-    
-    with open(notebook_file, 'w') as f:
-        json.dump(notebook, f, indent=1)
-    
-    print(f"✓ Generated notebook: {notebook_file}")
-    print(f"  Open in Databricks to register {len(exported_files)} table(s)")
+if all_exported:
+    print(f"✓ Exported from {len(all_exported)}/{len(CLUSTERS)} clusters\n")
+    for cluster_name, tables in all_exported.items():
+        print(f"  {cluster_name}: {len(tables)} table(s)")
 else:
     print("✗ No tables exported successfully")
-
-
