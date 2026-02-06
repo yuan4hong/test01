@@ -16,7 +16,8 @@ CLUSTERS = {
     "GCP_EAST4": "gcp-us-east4-dca-wl-prd-001",
 }
 
-TABLES = ["slurm_nodes"]
+TABLES = ["slurm_nodes","slurm_reservations","slurm_partitions","slurm_topology_blocks",
+          "slurm_nodes_reservations","node_history"]
 LIMIT = 10000
 BATCH_SIZE = 5000  # Larger batches work better with JSON approach
 TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
