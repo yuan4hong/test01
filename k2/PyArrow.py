@@ -11,12 +11,18 @@ from databricks import sql
 db_connection = sql.connect(
     server_hostname="nvidia-edsp-or1.cloud.databricks.com",
     http_path="/sql/1.0/warehouses/fee15d0c1610eca9",
-    access_token=os.environ.get("DATABRICKS_TOKEN")
+    ##access_token=os.environ.get("DATABRICKS_TOKEN")
+    access_token="dapia6aa631c28b862494ba5e1e4268a1023"
 )
+
+print("databricks session id: ", db_connection.get_session_id())
+print("connected to databricks.")
+
 
 # Configuration
 CLUSTERS = {
-    "OCI_HSG": "nv-prd-dgxc.teleport.sh-oci-hsg-dca-wl-prd-001",
+    #"OCI_HSG": "nv-prd-dgxc.teleport.sh-oci-hsg-dca-wl-prd-001",
+    "OCI_HSG": "oci-hsg-dca-wl-prd-001",
 }
 
 TABLES = ["slurm_nodes"]
@@ -198,7 +204,7 @@ for cluster_name, context in CLUSTERS.items():
             # Step 2: Write DataFrame directly to Databricks
             write_df_to_databricks(df, table)
             
-            exported_tables.append(table)
+            #exported_tables.append(table)
             
         except Exception as e:
             print(f"  ✗ Failed to export {table}: {e}")
