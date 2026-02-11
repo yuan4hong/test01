@@ -26,8 +26,9 @@ CLUSTERS = {
 }
 
 TABLES = ["slurm_nodes","slurm_reservations","slurm_partitions","slurm_topology_blocks","slurm_nodes_reservations","node_history"]
-LIMIT = 100
-BATCH_SIZE = 1000
+#TABLES = ["slurm_nodes"]
+LIMIT = 10000
+BATCH_SIZE = 10000
 TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 K8S_NAMESPACE = "maestro"      # Kubernetes namespace for kubectl
 DB_SCHEMA = "schema1"          # Databricks schema for table registration
@@ -63,6 +64,7 @@ def export_table_to_df(cluster_name: str, context: str, table_name: str, limit: 
         SELECT row_to_json(t) 
         FROM (
             SELECT * FROM {table_name} 
+            order by ctid desc
             OFFSET {offset} 
             LIMIT {batch_limit}
         ) t
