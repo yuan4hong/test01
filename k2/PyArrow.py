@@ -11,8 +11,7 @@ from databricks import sql
 db_connection = sql.connect(
     server_hostname="nvidia-edsp-or1.cloud.databricks.com",
     http_path="/sql/1.0/warehouses/fee15d0c1610eca9",
-    ##access_token=os.environ.get("DATABRICKS_TOKEN")
-    access_token="dapia6aa631c28b862494ba5e1e4268a1023"
+    access_token=os.environ.get("DATABRICKS_TOKEN")
 )
 
 print("databricks session id: ", db_connection.get_session_id())
@@ -23,11 +22,12 @@ print("connected to databricks.")
 CLUSTERS = {
     #"OCI_HSG": "nv-prd-dgxc.teleport.sh-oci-hsg-dca-wl-prd-001",
     "OCI_HSG": "oci-hsg-dca-wl-prd-001",
+    "GCP_EAST4": "gcp-us-east4-dca-wl-prd-001",
 }
 
-TABLES = ["slurm_nodes"]
+TABLES = ["slurm_nodes","slurm_reservations","slurm_partitions","slurm_topology_blocks","slurm_nodes_reservations","node_history"]
 LIMIT = 100
-BATCH_SIZE = 50
+BATCH_SIZE = 1000
 TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 K8S_NAMESPACE = "maestro"      # Kubernetes namespace for kubectl
 DB_SCHEMA = "schema1"          # Databricks schema for table registration
@@ -202,9 +202,10 @@ for cluster_name, context in CLUSTERS.items():
             df = export_table_to_df(cluster_name, context, table, LIMIT, BATCH_SIZE)
             
             # Step 2: Write DataFrame directly to Databricks
-            write_df_to_databricks(df, table)
+            table_name = f"{cluster_name}_{table}"
+            write_df_to_databricks(df, table_name)
             
-            #exported_tables.append(table)
+            exported_tables.append(table_name)
             
         except Exception as e:
             print(f"  ✗ Failed to export {table}: {e}")
