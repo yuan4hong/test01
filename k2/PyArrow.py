@@ -25,20 +25,45 @@ CLUSTERS = {
     "GCP_EAST4": "gcp-us-east4-dca-wl-prd-001",
 }
 
-TABLES = ["slurm_nodes","slurm_reservations","slurm_partitions","slurm_topology_blocks","slurm_nodes_reservations","node_history"]
+#TABLES = ["slurm_nodes","slurm_reservations","slurm_partitions","slurm_topology_blocks","slurm_nodes_reservations","node_history"]
 #TABLES = ["slurm_nodes"]
-LIMIT = 10000
+
+LIMIT = 100
 BATCH_SIZE = 10000
 TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 K8S_NAMESPACE = "maestro"      # Kubernetes namespace for kubectl
 DB_SCHEMA = "schema1"          # Databricks schema for table registration
+
+
+def get_public_tables(context: str) -> list:
+    """Query PostgreSQL for all table names in the public schema."""
+    query = (
+        "SELECT tablename FROM pg_tables "
+        "WHERE schemaname = 'public' ORDER BY tablename;"
+    )
+    cmd = [
+        "kubectl", "--context", context, "-n", K8S_NAMESPACE,
+        "exec", "maestro-cluster-1", "--",
+        "psql", "-U", "postgres", "-d", "maestro",
+        "-t", "-A",
+        "-c", query,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to list tables: {result.stderr}")
+    tables = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+    return tables
+
+
+# If non-empty, use this list for all clusters; if empty, query public schema per cluster
+TABLES = []
 
 print("=" * 60)
 print("PostgreSQL -> Databricks Direct Export")
 print("=" * 60)
 print(f"Timestamp: {TIMESTAMP}")
 print(f"Clusters: {list(CLUSTERS.keys())}")
-print(f"Tables: {TABLES}")
+print(f"Tables: {TABLES if TABLES else 'from public schema (per cluster)'}")
 print(f"Limit per table: {LIMIT} rows")
 print()
 
@@ -193,9 +218,12 @@ for cluster_name, context in CLUSTERS.items():
     print(f"Processing Cluster: {cluster_name}")
     print("=" * 60)
     
+    tables_to_export = TABLES if TABLES else get_public_tables(context)
+    print(f"Tables for {cluster_name}: {tables_to_export}")
+    
     exported_tables = []
     
-    for table in TABLES:
+    for table in tables_to_export:
         print()
         print("-" * 40)
         
