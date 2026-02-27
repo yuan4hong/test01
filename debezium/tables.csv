@@ -1,7 +1,7 @@
 table_name,enabled,total_rows,row_limit,order_by_column,batch_size,col_to_skip
-screentest_history,1,37301,10000,occurred_at,10000,
-script_workflow_events,1,159448544,10000,created_at,10000,
-snst_insight,1,4063,10000,created_at,1000,raw_data
+screentest_history,1,37301,10,occurred_at,10000,
+script_workflow_events,1,159448544,10,created_at,10000,
+snst_insight,1,4063,10,created_at,10000,raw_data
 agent_messages,0,6963,10000,ctid,10000,
 agent_runs,0,679,10000,ctid,10000,
 agent_tool_calls,0,3051,10000,ctid,10000,
